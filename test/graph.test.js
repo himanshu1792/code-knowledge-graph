@@ -98,6 +98,20 @@ test('react: routes, context, props data flow', () => {
   c.close();
 });
 
+test('nextjs: api routes are backend endpoints, frontend fetch links to them', () => {
+  const f = indexInto('next-app', join(FX, 'ms', 'next-app'));
+  const c = ro(f);
+  const eps = new Set(c.prepare("SELECT http_method||' '||path p FROM nodes WHERE http_method IS NOT NULL AND kind!='external_endpoint'").all().map((r) => r.p));
+  assert.ok(eps.has('GET /api/orders'), [...eps].join(','));   // app router exported GET
+  assert.ok(eps.has('POST /api/orders'));                      // app router exported POST
+  assert.ok(eps.has('POST /api/users'));                       // pages api req.method==='POST'
+  c.close();
+  // self-federate: the page's fetch calls resolve to its own API routes
+  const dir = mkdtempSync(join(tmpdir(), 'kg-'));
+  const r = federate(join(dir, 'm.db'), [{ name: 'next-app', dbPath: f }]);
+  assert.ok(r.links_resolved >= 2, `resolved=${r.links_resolved}`);  // /api/orders GET + /api/users POST
+});
+
 // ---------- Full-stack federation ----------
 test('federation: frontend + backends linked, flow crosses tiers', () => {
   const login = indexInto('login-service', join(FX, 'ms', 'login-service', 'src', 'main', 'java'));

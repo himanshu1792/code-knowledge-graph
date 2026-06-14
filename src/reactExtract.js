@@ -37,14 +37,16 @@ const strVal = (node) => {
 };
 
 function componentName(node) {
+  // HTTP-method names (GET/POST/...) are Next.js route handlers, not components.
+  const ok = (n) => n && isComp(n.text) && !HTTP_METHODS.has(n.text);
   if (node.type === 'function_declaration' || node.type === 'class_declaration') {
     const n = node.childForFieldName('name');
-    if (n && isComp(n.text)) return n.text;
+    if (ok(n)) return n.text;
   }
   if (node.type === 'variable_declarator') {
     const n = node.childForFieldName('name');
     const v = node.childForFieldName('value');
-    if (n && isComp(n.text) && v && ['arrow_function', 'function_expression', 'function'].includes(v.type)) return n.text;
+    if (ok(n) && v && ['arrow_function', 'function_expression', 'function'].includes(v.type)) return n.text;
   }
   return null;
 }
@@ -151,6 +153,36 @@ function hookName(node) {
   return fn && fn.type === 'identifier' && /^use[A-Z]/.test(fn.text) ? fn.text : null;
 }
 
+const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']);
+
+// Next.js API route handlers (these ARE backend endpoints):
+//   app/<segs>/route.ts -> exported GET/POST/... functions => method per export
+//   pages/api/<segs>.ts -> default handler; methods from req.method checks (else ANY)
+function nextApi(rel, tree) {
+  const n = rel.replaceAll('\\', '/');
+  const dyn = (p) => p.replace(/\[(?:\.\.\.)?([^\]]+)\]/g, '{$1}');
+  let m;
+  if ((m = n.match(/(?:^|\/)app\/(.+)\/route\.[tj]sx?$/))) {
+    const path = `/${dyn(m[1])}`;
+    const methods = new Set();
+    for (const fn of tree.rootNode.descendantsOfType('function_declaration')) {
+      const nm = fn.childForFieldName('name'); if (nm && HTTP_METHODS.has(nm.text)) methods.add(nm.text);
+    }
+    for (const vd of tree.rootNode.descendantsOfType('variable_declarator')) {
+      const nm = vd.childForFieldName('name'); const v = vd.childForFieldName('value');
+      if (nm && HTTP_METHODS.has(nm.text) && v && ['arrow_function', 'function_expression'].includes(v.type)) methods.add(nm.text);
+    }
+    return { path, methods: methods.size ? [...methods] : ['GET'] };
+  }
+  if ((m = n.match(/(?:^|\/)pages\/api\/(.+)\.[tj]sx?$/))) {
+    let seg = m[1]; if (seg.endsWith('/index')) seg = seg.slice(0, -6);
+    const path = `/api/${dyn(seg)}`.replace(/\/$/, '') || '/api';
+    const methods = [...new Set([...tree.rootNode.text.matchAll(/req\.method\s*===?\s*['"`](GET|POST|PUT|DELETE|PATCH)['"`]/g)].map((x) => x[1]))];
+    return { path, methods: methods.length ? methods : ['ANY'] };
+  }
+  return null;
+}
+
 function nextRoute(rel) {
   const n = rel.replaceAll('\\', '/');
   const dyn = (p) => p.replace(/\[(?:\.\.\.)?([^\]]+)\]/g, '{$1}');
@@ -167,40 +199,58 @@ function nextRoute(rel) {
   return null;
 }
 
+// NOTE: the tree-sitter parser is a singleton, and re-parsing invalidates
+// previously returned trees. So we DO NOT store trees — we record file paths and
+// the symbol maps, then re-parse each file fresh at the moment it is walked.
 export function parseReactRepo(root) {
-  const files = [];
+  const fileRels = [];
   const compByName = new Map();
   const ctxByName = new Map();
+  const push = (map, key, val) => { if (!map.has(key)) map.set(key, []); map.get(key).push(val); };
   for (const abs of discoverReactFiles(root)) {
     const rel = relative(root, abs);
+    fileRels.push(rel);
     const tree = tsxParser().parse(readFileSync(abs, 'utf8'));
-    files.push({ rel, tree });
     const collect = (node) => {
       const cn = componentName(node);
-      if (cn) { const id = `${rel}#${cn}`; (compByName.get(cn) || compByName.set(cn, []).get(cn)).push(id); }
+      if (cn) push(compByName, cn, `${rel}#${cn}`);
       const xn = contextNameOf(node);
-      if (xn) { const id = `${rel}#${xn}`; (ctxByName.get(xn) || ctxByName.set(xn, []).get(xn)).push(id); }
+      if (xn) push(ctxByName, xn, `${rel}#${xn}`);
       for (const ch of node.children) collect(ch);
     };
     collect(tree.rootNode);
   }
-  return { files, compByName, ctxByName };
+  return { fileRels, compByName, ctxByName };
 }
 
 export function extractReact(database, root) {
-  const { files, compByName, ctxByName } = parseReactRepo(root);
+  const { fileRels, compByName, ctxByName } = parseReactRepo(root);
   const uniq = (map, name) => { const ids = map.get(name); return ids && ids.length === 1 ? ids[0] : null; };
 
-  for (const { rel, tree } of files) {
+  for (const rel of fileRels) {
+    const tree = tsxParser().parse(readFileSync(join(root, rel), 'utf8'));
     const moduleId = `module::${rel}`;
     db.upsertNode(database, { id: moduleId, kind: 'module', name: rel, file: rel, layer: 'module' });
 
-    // Next.js file-based route
+    // Next.js file-based page route
     const routePath = nextRoute(rel);
     if (routePath) {
       const rid = `route::${routePath}`;
       db.upsertNode(database, { id: rid, kind: 'route', name: routePath, path: routePath, file: rel, layer: 'route' });
       db.addEdge(database, rid, moduleId, 'routes_to');
+    }
+
+    // Next.js API route handlers => backend endpoints (federation-matchable)
+    const api = nextApi(rel, tree);
+    if (api) {
+      for (const method of api.methods) {
+        const hid = `${rel}#${method}`;
+        db.upsertNode(database, {
+          id: hid, kind: 'method', name: `${method} ${api.path}`, file: rel,
+          http_method: method, path: api.path, layer: 'controller',
+        });
+        db.addEdge(database, moduleId, hid, 'routes_to');
+      }
     }
 
     const walk = (node, currentComp) => {

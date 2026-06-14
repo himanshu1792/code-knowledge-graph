@@ -54,7 +54,8 @@ function resolveCrossCalls(out) {
     let handler = null;
     for (const ep of endpoints) {
       const svcOk = target === '*' || !target || ep.service === target;
-      if (svcOk && ep.http_method === method && pathMatch(path, ep.path || '')) { handler = ep.id; break; }
+      const methodOk = ep.http_method === method || ep.http_method === 'ANY';
+      if (svcOk && methodOk && pathMatch(path, ep.path || '')) { handler = ep.id; break; }
     }
     if (handler) {
       db.addEdge(out, e.src, handler, 'calls_remote', JSON.stringify({ ...a, resolved: true }));
