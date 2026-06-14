@@ -174,6 +174,19 @@ def test_enrichment_rejects_unknown_summary_node(graph):
     conn.close()
 
 
+def test_enrichment_summary_surfaces_in_describe(graph):
+    conn = db.connect(graph)
+    db.init_schema(conn)
+    nid = "com.example.demo.service.OrderService"
+    enrich.write_summary(conn, nid, "Sorts and serves customer orders.")
+    conn.commit()
+    conn.close()
+
+    server._DB_FILE = graph
+    desc = server.kg_describe("OrderService")
+    assert desc["summary"] == "Sorts and serves customer orders."
+
+
 # --- sync ----------------------------------------------------------------------
 
 def test_reindex_reflects_change(graph, tmp_path):

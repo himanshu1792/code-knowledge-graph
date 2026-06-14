@@ -141,7 +141,9 @@ def cmd_enrich(args) -> int:
         return 1
     conn.close()
     print(f"Enrichment complete: {report['features_written']} feature(s) written, "
-          f"{report['features_rejected']} rejected by anti-hallucination gate.")
+          f"{report['features_rejected']} rejected; "
+          f"{report['summaries_written']} summary(ies) written, "
+          f"{report['summaries_rejected']} rejected (anti-hallucination gate).")
     return 0
 
 

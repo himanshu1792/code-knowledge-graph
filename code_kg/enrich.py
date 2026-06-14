@@ -112,11 +112,15 @@ _SYSTEM = (
     "You are given the EXACT set of classes (with file paths and node ids) and HTTP "
     "endpoints already extracted deterministically from the code. "
     "You must ONLY reference files and node ids from that set — never invent names. "
-    "Group the codebase into user-facing features/capabilities, and for each feature "
-    "list the files that implement it (entry node id where applicable). "
+    "Do two things: "
+    "(1) Group the codebase into user-facing features/capabilities; for each list the "
+    "files that implement it (and an entry node id where applicable). "
+    "(2) Write a concise one-line summary for each class node id (and endpoint handler "
+    "node id) describing its responsibility. "
     "Respond with a single JSON object of the form "
     '{"features": [{"name": str, "description": str, "files": [str], '
-    '"entry_node_id": str (optional)}]}.'
+    '"entry_node_id": str (optional)}], '
+    '"summaries": [{"node_id": str, "summary": str}]}.'
 )
 
 
@@ -156,7 +160,7 @@ def enrich(
                 "role": "user",
                 "content": (
                     "Here is the ground-truth graph context (classes + endpoints) as JSON. "
-                    "Produce the feature map JSON described in the system message.\n\n"
+                    "Produce the feature map and summaries described in the system message.\n\n"
                     + json.dumps(payload, indent=2)
                 ),
             },
@@ -165,8 +169,8 @@ def enrich(
     text = response.choices[0].message.content or "{}"
     data = json.loads(text)
 
-    written, rejected = 0, 0
-    # clear any prior LLM features
+    # --- features ---
+    feat_written, feat_rejected = 0, 0
     conn.execute("DELETE FROM features WHERE id LIKE 'llm:%'")
     conn.execute(
         "DELETE FROM feature_files WHERE feature_id IN "
@@ -185,9 +189,24 @@ def enrich(
                 feat.get("files", []),
                 entry_nodes,
             )
-            written += 1
+            feat_written += 1
         except EnrichmentRejected:
-            rejected += 1
+            feat_rejected += 1
+
+    # --- per-node summaries ---
+    sum_written, sum_rejected = 0, 0
+    for item in data.get("summaries", []):
+        nid, summary = item.get("node_id"), item.get("summary")
+        if not nid or not summary:
+            continue
+        try:
+            write_summary(conn, nid, summary)
+            sum_written += 1
+        except EnrichmentRejected:
+            sum_rejected += 1
 
     conn.commit()
-    return {"features_written": written, "features_rejected": rejected}
+    return {
+        "features_written": feat_written, "features_rejected": feat_rejected,
+        "summaries_written": sum_written, "summaries_rejected": sum_rejected,
+    }
