@@ -1,0 +1,12 @@
+# live graph (rebuilt on demand)
+.code-kg/
+**/.code-kg/
+
+# python / uv
+__pycache__/
+*.pyc
+.venv/
+.uv/
+dist/
+build/
+*.egg-info/
