@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "code-kg": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/absolute/path/to/code-knowledge-graph",
+        "code-kg",
+        "serve",
+        "--repo",
+        "/absolute/path/to/target/repo"
+      ]
+    }
+  }
+}
