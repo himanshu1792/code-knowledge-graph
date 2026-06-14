@@ -58,6 +58,8 @@ class FieldInfo:
 class Invocation:
     receiver: Optional[str]   # identifier text, "this", or None (unqualified)
     method: str
+    str_args: list[str] = field(default_factory=list)   # string-literal argument values
+    receiver_type: Optional[str] = None                 # resolved at write time
 
 
 @dataclass
@@ -348,10 +350,27 @@ def _scan_body(src, node, mi: MethodInfo) -> None:
             elif obj_node.type == "this":
                 receiver = "this"
         if name_node is not None:
-            mi.invocations.append(Invocation(receiver=receiver, method=_text(src, name_node)))
+            str_args = _string_literals(src, node.child_by_field_name("arguments"))
+            mi.invocations.append(Invocation(
+                receiver=receiver, method=_text(src, name_node), str_args=str_args,
+            ))
 
     for ch in node.children:
         _scan_body(src, ch, mi)
+
+
+def _string_literals(src, args_node) -> list[str]:
+    """Collect string-literal argument values (quotes stripped) from an argument_list."""
+    if args_node is None:
+        return []
+    out: list[str] = []
+    for ch in args_node.children:
+        if ch.type == "string_literal":
+            t = _text(src, ch)
+            if len(t) >= 2 and t[0] in "\"'" and t[-1] in "\"'":
+                t = t[1:-1]
+            out.append(t)
+    return out
 
 
 # --- repo walk + resolution ----------------------------------------------------

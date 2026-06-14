@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     http_method TEXT,               -- GET|POST|... for endpoint handler methods
     path        TEXT,               -- resolved http path for endpoint handler methods
     summary     TEXT,               -- one-line summary (enrichment)
-    attrs       TEXT                -- JSON: structured detail (e.g. JPA column mapping)
+    attrs       TEXT,               -- JSON: structured detail (e.g. JPA column mapping)
+    service     TEXT                -- owning microservice name (for federation)
 );
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -64,6 +65,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_kind   ON nodes(kind);
 CREATE INDEX IF NOT EXISTS idx_nodes_name   ON nodes(name);
 CREATE INDEX IF NOT EXISTS idx_nodes_file   ON nodes(file);
 CREATE INDEX IF NOT EXISTS idx_nodes_layer  ON nodes(layer);
+CREATE INDEX IF NOT EXISTS idx_nodes_service ON nodes(service);
 CREATE INDEX IF NOT EXISTS idx_edges_src    ON edges(src);
 CREATE INDEX IF NOT EXISTS idx_edges_dst    ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_edges_kind   ON edges(kind);
@@ -113,7 +115,7 @@ def upsert_node(conn: sqlite3.Connection, node: dict) -> None:
     cols = (
         "id", "kind", "name", "file", "package", "signature",
         "start_line", "end_line", "annotations", "layer",
-        "http_method", "path", "summary", "attrs",
+        "http_method", "path", "summary", "attrs", "service",
     )
     values = [node.get(c) for c in cols]
     placeholders = ", ".join(["?"] * len(cols))

@@ -23,6 +23,9 @@ guessing which files to change.**
   entities, tables, relationships (cascade/fetch/owning side), and repositories;
   `kg_entity("Customer")` for one entity's full column + relationship mapping.
 - Understanding a symbol → `kg_describe("...")`, `kg_neighbors("...")`.
+- Multi-service codebase (federated graph) → `kg_service_map()` for which service
+  calls which, and `kg_request_flow("/api/...")` to trace a request across
+  service boundaries (Feign / RestTemplate calls are linked as `calls_remote`).
 
 The graph is the source of truth for structure (classes, endpoints, dependency
 injection, call/impact relationships). Use it first; fall back to reading files

@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Optional
 
-from . import db, extract, jpa, spring
+from . import db, extract, federate, jpa, remote, spring
 
 
 # --- helpers -------------------------------------------------------------------
@@ -37,15 +37,23 @@ def _file_signature(root: str) -> dict:
     return sig
 
 
-def build_graph(conn, source_root: str) -> dict:
-    """Full (re)build: parse → structure → spring → fallback features."""
+def build_graph(conn, source_root: str, service: Optional[str] = None) -> dict:
+    """Full (re)build: parse → structure → spring → jpa → outbound → features."""
     classes, symbols = extract.parse_repo(source_root)
     db.reset(conn)
     extract.write_structure(conn, classes, symbols)
     spring.apply(conn, classes, symbols)
     jpa.apply(conn, classes, symbols)
+    remote.apply(conn, classes, symbols)
     spring.build_fallback_features(conn)
 
+    if not service:
+        service = os.path.basename(find_repo_root(source_root))
+    # stamp the owning service on every internal node (external_endpoint nodes
+    # keep their target service, already set by the outbound pass)
+    conn.execute("UPDATE nodes SET service = ? WHERE service IS NULL", (service,))
+
+    db.set_meta(conn, "service", service)
     db.set_meta(conn, "source_root", os.path.abspath(source_root))
     db.set_meta(conn, "indexed_at", str(int(time.time())))
     import json
@@ -68,9 +76,10 @@ def cmd_index(args) -> int:
     db_file = db.resolve_db_path(repo_root, args.db)
     conn = db.connect(db_file)
     db.init_schema(conn)
-    counts = build_graph(conn, source)
+    counts = build_graph(conn, source, service=args.service)
+    service = db.get_meta(conn, "service")
     conn.close()
-    print(f"Indexed {source}")
+    print(f"Indexed {source}  (service: {service})")
     print(f"  graph.db: {db_file}")
     _print_counts(counts)
     return 0
@@ -97,7 +106,8 @@ def cmd_reindex(args) -> int:
         f for f in (set(old) & set(new)) if old[f] != new[f]
     )
 
-    counts = build_graph(conn, source_root)
+    service = args.service or db.get_meta(conn, "service")
+    counts = build_graph(conn, source_root, service=service)
     conn.close()
     if changed:
         print(f"Reindexed; {len(changed)} file(s) changed:")
@@ -142,6 +152,31 @@ def cmd_serve(args) -> int:
         print(f"No graph at {db_file}; run `code-kg index <path>` first.", file=sys.stderr)
         return 1
     server.serve(db_file)
+    return 0
+
+
+def cmd_federate(args) -> int:
+    services: list[tuple[str, str]] = []
+    for repo in args.repos:
+        repo_root = find_repo_root(os.path.abspath(repo))
+        db_file = db.resolve_db_path(repo_root, None)
+        if not os.path.exists(db_file):
+            print(f"No graph for {repo} at {db_file}; run `code-kg index` first.",
+                  file=sys.stderr)
+            return 1
+        conn = db.connect(db_file)
+        db.init_schema(conn)
+        name = db.get_meta(conn, "service") or os.path.basename(repo_root)
+        conn.close()
+        services.append((name, db_file))
+
+    output = os.path.abspath(args.output)
+    report = federate.federate(output, services)
+    print(f"Federated {len(report['services'])} services: {', '.join(report['services'])}")
+    print(f"  merged graph.db: {output}")
+    print(f"  cross-service links: {report['links_resolved']} resolved, "
+          f"{report['links_unresolved']} unresolved")
+    print(f"  serve with: code-kg serve --db {output}")
     return 0
 
 
@@ -335,13 +370,20 @@ def build_parser() -> argparse.ArgumentParser:
     pi = sub.add_parser("index", help="full index of a source tree")
     pi.add_argument("path", help="path to source root (e.g. <repo>/src/main/java)")
     pi.add_argument("--db", help="explicit graph.db path")
+    pi.add_argument("--service", help="microservice name (default: repo dir name)")
     pi.set_defaults(func=cmd_index)
 
     pr = sub.add_parser("reindex", help="incremental re-index (detect changed files)")
     pr.add_argument("path", nargs="?", help="source root (defaults to last-indexed)")
     pr.add_argument("--repo", help="repo root (to locate graph.db)")
     pr.add_argument("--db", help="explicit graph.db path")
+    pr.add_argument("--service", help="microservice name (default: keep existing)")
     pr.set_defaults(func=cmd_reindex)
+
+    pf = sub.add_parser("federate", help="merge several indexed services + link cross-service calls")
+    pf.add_argument("repos", nargs="+", help="repo roots of already-indexed services")
+    pf.add_argument("-o", "--output", required=True, help="path for the merged graph.db")
+    pf.set_defaults(func=cmd_federate)
 
     pe = sub.add_parser("enrich", help="optional LLM enrichment pass (Azure OpenAI)")
     pe.add_argument("--repo", help="repo root (to locate graph.db)")

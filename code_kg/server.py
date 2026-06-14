@@ -84,14 +84,14 @@ def _expand_members(conn: sqlite3.Connection, ids: list[str]) -> set[str]:
 
 def _node_brief(conn: sqlite3.Connection, node_id: str) -> dict:
     r = conn.execute(
-        "SELECT id, kind, name, file, start_line, layer, http_method, path, summary "
+        "SELECT id, kind, name, file, start_line, layer, http_method, path, summary, service "
         "FROM nodes WHERE id = ?", (node_id,)
     ).fetchone()
     if not r:
         return {"id": node_id}
     d = {"id": r["id"], "kind": r["kind"], "name": r["name"], "file": r["file"],
          "line": r["start_line"]}
-    for k in ("layer", "http_method", "path", "summary"):
+    for k in ("service", "layer", "http_method", "path", "summary"):
         if r[k]:
             d[k] = r[k]
     return d
@@ -273,7 +273,7 @@ def kg_impact_of(symbol: str) -> dict:
         start = _expand_members(conn, base)
         reached = _reachable(
             conn, start,
-            ("calls", "injects", "routes_to", "persists",
+            ("calls", "calls_remote", "injects", "routes_to", "persists",
              "one_to_many", "many_to_one", "one_to_one", "many_to_many"),
             forward=False,
         )
@@ -431,6 +431,94 @@ def kg_entity(name: str) -> dict:
             "relationships": rels,
             "referenced_by": inbound,
             "repositories": managed_by,
+        }
+
+
+@mcp.tool()
+def kg_service_map() -> dict:
+    """Service-to-service dependency map (federated graph).
+
+    Shows which microservice calls which, over which endpoints, and whether each
+    cross-service call was resolved to a real endpoint in the called service.
+    """
+    with _conn() as conn:
+        services = sorted({r["service"] for r in conn.execute(
+            "SELECT DISTINCT service FROM nodes WHERE service IS NOT NULL")})
+        deps: dict = {}
+
+        def add(frm, to, ep, resolved):
+            key = (frm, to)
+            entry = deps.setdefault(key, {"from": frm, "to": to, "calls": [],
+                                          "resolved": 0, "unresolved": 0})
+            entry["calls"].append(ep)
+            entry["resolved" if resolved else "unresolved"] += 1
+
+        # resolved cross-service links
+        for r in conn.execute(
+            "SELECT e.src src, e.dst dst, e.attrs a FROM edges e WHERE e.kind='calls_remote'"
+        ):
+            a = _loads(r["a"])
+            frm = _node_brief(conn, r["src"]).get("service")
+            to = _node_brief(conn, r["dst"]).get("service") or a.get("target_service")
+            add(frm, to, f"{a.get('http_method')} {a.get('path')}", True)
+        # unresolved outbound calls
+        for r in conn.execute(
+            "SELECT e.src src, e.attrs a FROM edges e WHERE e.kind='calls_service' "
+            "AND e.dst IN (SELECT id FROM nodes WHERE kind='external_endpoint' "
+            "AND (attrs IS NULL OR attrs NOT LIKE '%\"resolved\": true%'))"
+        ):
+            a = _loads(r["a"])
+            frm = _node_brief(conn, r["src"]).get("service")
+            add(frm, a.get("target_service"), f"{a.get('http_method')} {a.get('path')}", False)
+
+        return {"services": services, "dependencies": list(deps.values())}
+
+
+@mcp.tool()
+def kg_request_flow(path: str, method: str = "") -> dict:
+    """Trace a request from an endpoint through the call chain, across services.
+
+    Follows routes_to / calls / calls_remote forward from the matching handler,
+    so the result spans every microservice the request touches.
+    """
+    with _conn() as conn:
+        q = ("SELECT id, http_method, path, name, service FROM nodes "
+             "WHERE http_method IS NOT NULL AND kind != 'external_endpoint' AND path = ?")
+        params = [path]
+        if method:
+            q += " AND http_method = ?"
+            params.append(method.upper())
+        rows = conn.execute(q, params).fetchall()
+        if not rows:
+            rows = conn.execute(
+                "SELECT id, http_method, path, name, service FROM nodes "
+                "WHERE http_method IS NOT NULL AND kind != 'external_endpoint' "
+                "AND path LIKE ?", (f"%{path.strip('/')}%",)
+            ).fetchall()
+        if not rows:
+            return {"path": path, "error": "no endpoint matched"}
+
+        start = rows[0]
+        kinds = ("routes_to", "calls", "calls_remote")
+        reached = _reachable(conn, {start["id"]}, kinds, forward=True)
+        hops = [
+            {"from": _node_brief(conn, e["src"]),
+             "to": _node_brief(conn, e["dst"]),
+             "via": e["kind"]}
+            for e in conn.execute(
+                "SELECT src, dst, kind FROM edges WHERE kind IN "
+                "('calls_remote') AND src IN ({})".format(",".join("?" * len(reached))),
+                tuple(reached),
+            )
+        ]
+        services = sorted({_node_brief(conn, n).get("service")
+                           for n in reached if _node_brief(conn, n).get("service")})
+        return {
+            "entry": {"method": start["http_method"], "path": start["path"],
+                      "handler": start["name"], "service": start["service"]},
+            "services_touched": services,
+            "cross_service_hops": hops,
+            "reachable": [_node_brief(conn, n) for n in sorted(reached)],
         }
 
 

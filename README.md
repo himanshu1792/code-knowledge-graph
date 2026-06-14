@@ -64,6 +64,8 @@ uv run code-kg digest --repo /path/to/target/repo -o ARCHITECTURE.md
 | `kg_data_model()` | JPA/Hibernate entities, tables, relationships (cascade/fetch/owning), repository→entity |
 | `kg_entity(name)` | Full mapping of one entity: columns, PK, relationships, repositories |
 | `kg_neighbors(node)` / `kg_describe(node)` | Node neighborhood / full detail |
+| `kg_service_map()` | Service→service dependency map (federated graph) |
+| `kg_request_flow(path)` | Trace a request through the call chain, across services |
 
 Register the server with your agent using `mcp.user.json` (fill in the absolute
 paths). Drop `instructions/knowledge-graph-usage.instructions.md` into the
@@ -107,6 +109,36 @@ On top of the Spring pass, the persistence layer is modeled (`code_kg/jpa.py`):
 Query it with `kg_data_model()` (overview) or `kg_entity(name)` (full mapping of
 one entity). `kg_impact_of` also traverses persistence + relationship edges, so
 changing an entity surfaces its repositories and the services that use them.
+
+## Multiple microservices (cross-service flow)
+
+Index each service independently, then **federate** to link them so an agent can
+trace a request/data flow across services from a single MCP.
+
+```bash
+# 1. Index each service (order-independent), naming each one
+uv run code-kg index /path/to/login-service/src/main/java --service login-service
+uv run code-kg index /path/to/user-service/src/main/java  --service user-service
+
+# 2. Merge + link cross-service calls into one graph
+uv run code-kg federate /path/to/login-service /path/to/user-service -o federated.db
+
+# 3. Serve the federated graph (one MCP exposes ALL services + the links)
+uv run code-kg serve --db federated.db
+```
+
+- **Outbound calls** are detected per service: OpenFeign (`@FeignClient(name=…)`
+  interfaces) and `RestTemplate` (`getForObject`/`postForObject`/… to
+  `http://<service>/<path>`). Each is recorded as a `calls_service` edge.
+- **`federate`** namespaces every node by service (`<service>::…`) so ids never
+  collide, then matches each outbound call to the called service's real endpoint
+  handler and links them with a `calls_remote` edge. Indexing order does not
+  matter; re-run `federate` after re-indexing any service.
+- **Contract:** a Feign `name` / RestTemplate host must equal the called
+  service's `--service` name. Unmatched calls stay visible as *unresolved* in
+  `kg_service_map()`.
+- `kg_impact_of` and `kg_request_flow` traverse `calls_remote`, so impact and
+  request flow span service boundaries.
 
 ## Sync on remote pushes
 
