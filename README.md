@@ -152,6 +152,33 @@ Java/Spring Boot first. Polyglot support, graph-DB backends (Neo4j/FalkorDB), an
 GraphRAG/embeddings are deferred — the SQLite schema + MCP boundary are designed
 so those can be added later without changing the `kg_*` interface.
 
+## Future enhancements (roadmap)
+
+These are designed-for but not yet built. The current schema (`nodes`/`edges`
+with JSON `attrs`) + the `kg_*` MCP boundary are intended to absorb them without
+a redesign.
+
+- **GraphRAG / semantic discovery.** Today symbol/feature lookup is
+  keyword-based. Add an embeddings index (e.g. an Azure OpenAI embeddings
+  deployment) over node summaries/signatures and the code at each `file:line`,
+  then a **hybrid retriever**: semantic search finds seed nodes, and we expand
+  along the existing edges (`calls`/`injects`/`routes_to`/`persists`/`calls_remote`)
+  to pull the connected subgraph + cross-service flow. Expose as `kg_search`
+  (fuzzy "where is X") and `kg_ask("how does login work?")` that answers grounded
+  in the retrieved subgraph + real code. *Highest-value piece: semantic discovery
+  when you don't know the exact symbol name; the NL "answerer" mainly benefits a
+  human-facing chatbot more than a tool-using coding agent.*
+- **Wider cross-service coverage.** Add WebClient and message-driven flows
+  (`@KafkaListener` / producers, Rabbit) so federation captures async hops, not
+  just Feign + RestTemplate.
+- **Compiler-accurate call graph.** Back `calls`/`kg_impact_of` with a
+  compiler-grade index (e.g. scip-java) instead of heuristic name resolution, for
+  precise impact analysis on overloads/generics/inheritance.
+- **Per-method summaries.** Extend enrichment beyond classes/endpoints to
+  method-level one-liners.
+- **Polyglot + graph-DB backend.** Additional languages and an optional
+  Neo4j/FalkorDB backend behind the same `kg_*` interface.
+
 ## Development
 
 ```bash
