@@ -6,6 +6,7 @@ Run via ``code-kg serve --repo <path>``. Backed by the read-only SQLite graph at
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -329,34 +330,55 @@ def kg_describe(node: str) -> dict:
         return d
 
 
+_REL_KINDS = ("one_to_many", "many_to_one", "one_to_one", "many_to_many")
+
+
+def _loads(s) -> dict:
+    try:
+        return json.loads(s) if s else {}
+    except (ValueError, TypeError):
+        return {}
+
+
 @mcp.tool()
 def kg_data_model() -> dict:
-    """The JPA/Hibernate persistence model: entities (+ table), relationships,
-    and which Spring Data repository manages each entity.
+    """The JPA/Hibernate persistence model: entities (+ table), relationships
+    (with cascade / fetch / mappedBy / owning side / join columns), and which
+    Spring Data repository manages each entity.
 
-    Use this for tasks involving the database layer, schema, or queries.
+    Use this for tasks involving the database layer, schema, mapping, or queries.
     """
-    _REL = ("one_to_many", "many_to_one", "one_to_one", "many_to_many")
     with _conn() as conn:
         entities = []
         for r in conn.execute(
-            "SELECT id, name, file, signature FROM nodes WHERE layer = 'entity' "
+            "SELECT id, name, file, signature, attrs FROM nodes WHERE layer = 'entity' "
             "AND kind IN ('class','interface','enum') ORDER BY name"
         ):
-            table = None
-            if r["signature"] and r["signature"].startswith("table="):
-                table = r["signature"][len("table="):]
-            entities.append({"entity": r["name"], "table": table, "file": r["file"]})
+            a = _loads(r["attrs"])
+            entities.append({
+                "entity": r["name"], "table": a.get("table"), "file": r["file"],
+                "primary_key": [c["column"] for c in a.get("columns", []) if c.get("primary_key")],
+                "column_count": len(a.get("columns", [])),
+            })
 
-        placeholders = ",".join("?" * len(_REL))
-        relationships = [
-            {"from": _node_brief(conn, r["src"])["name"],
-             "kind": r["kind"],
-             "to": _node_brief(conn, r["dst"]).get("name")}
-            for r in conn.execute(
-                f"SELECT src, dst, kind FROM edges WHERE kind IN ({placeholders})", _REL
-            )
-        ]
+        placeholders = ",".join("?" * len(_REL_KINDS))
+        relationships = []
+        for r in conn.execute(
+            f"SELECT src, dst, kind, attrs FROM edges WHERE kind IN ({placeholders})",
+            _REL_KINDS,
+        ):
+            a = _loads(r["attrs"])
+            rel = {"from": _node_brief(conn, r["src"])["name"],
+                   "kind": r["kind"],
+                   "to": _node_brief(conn, r["dst"]).get("name"),
+                   "owning": a.get("owning"),
+                   "fetch": a.get("fetch")}
+            for k in ("mapped_by", "cascade", "orphan_removal", "join_column",
+                      "join_table", "referenced_column"):
+                if k in a:
+                    rel[k] = a[k]
+            relationships.append(rel)
+
         repositories = [
             {"repository": _node_brief(conn, r["src"])["name"],
              "manages_entity": _node_brief(conn, r["dst"]).get("name")}
@@ -364,6 +386,52 @@ def kg_data_model() -> dict:
         ]
     return {"entities": entities, "relationships": relationships,
             "repositories": repositories}
+
+
+@mcp.tool()
+def kg_entity(name: str) -> dict:
+    """Full mapping of one JPA entity: table, every column (PK, generation,
+    nullable/unique/length, lob/enum/version flags), its relationships with
+    cascade/fetch/mappedBy/join details, and the repositories that manage it.
+    """
+    with _conn() as conn:
+        ids = _resolve(conn, name)
+        ids = [i for i in ids if _node_brief(conn, i).get("kind") in
+               ("class", "interface", "enum")]
+        if not ids:
+            return {"entity": name, "error": "not found"}
+        nid = ids[0]
+        r = conn.execute("SELECT name, file, attrs FROM nodes WHERE id = ?", (nid,)).fetchone()
+        a = _loads(r["attrs"])
+        rels = []
+        placeholders = ",".join("?" * len(_REL_KINDS))
+        for e in conn.execute(
+            f"SELECT dst, kind, attrs FROM edges WHERE src = ? AND kind IN ({placeholders})",
+            (nid, *_REL_KINDS),
+        ):
+            d = _loads(e["attrs"])
+            d.update({"kind": e["kind"], "to": _node_brief(conn, e["dst"]).get("name")})
+            rels.append(d)
+        # inbound relationships (other entities pointing here)
+        inbound = [
+            {"kind": e["kind"], "from": _node_brief(conn, e["src"]).get("name"),
+             **_loads(e["attrs"])}
+            for e in conn.execute(
+                f"SELECT src, kind, attrs FROM edges WHERE dst = ? AND kind IN ({placeholders})",
+                (nid, *_REL_KINDS),
+            )
+        ]
+        managed_by = [
+            _node_brief(conn, e["src"]).get("name")
+            for e in conn.execute("SELECT src FROM edges WHERE dst = ? AND kind='persists'", (nid,))
+        ]
+        return {
+            "entity": r["name"], "file": r["file"], "table": a.get("table"),
+            "columns": a.get("columns", []),
+            "relationships": rels,
+            "referenced_by": inbound,
+            "repositories": managed_by,
+        }
 
 
 # --- graph traversal -----------------------------------------------------------

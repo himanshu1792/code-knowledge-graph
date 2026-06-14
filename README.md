@@ -57,7 +57,8 @@ uv run code-kg digest --repo /path/to/target/repo -o ARCHITECTURE.md
 | `kg_endpoints()` / `kg_endpoint(path)` | Endpoints from code + downstream chain |
 | `kg_callers(symbol)` / `kg_callees(symbol)` | Direct call edges |
 | `kg_impact_of(symbol)` | Everything that depends on a symbol (reverse reachability) |
-| `kg_data_model()` | JPA/Hibernate entities, tables, relationships, repository→entity |
+| `kg_data_model()` | JPA/Hibernate entities, tables, relationships (cascade/fetch/owning), repository→entity |
+| `kg_entity(name)` | Full mapping of one entity: columns, PK, relationships, repositories |
 | `kg_neighbors(node)` / `kg_describe(node)` | Node neighborhood / full detail |
 
 Register the server with your agent using `mcp.user.json` (fill in the absolute
@@ -87,15 +88,21 @@ feature_files(feature_id, file, entry_node_id)
 On top of the Spring pass, the persistence layer is modeled (`code_kg/jpa.py`):
 
 - **Entities**: `@Entity`/`@Table` classes → layer `entity`, with the table name.
+  Each column carries its mapping in `attrs` (JSON): primary key (`@Id`),
+  generation strategy (`@GeneratedValue`), and `@Column` constraints
+  (name/nullable/unique/length), plus `@Lob`/`@Enumerated`/`@Version`/`@Transient`.
 - **Relationships**: `@OneToMany`/`@ManyToOne`/`@OneToOne`/`@ManyToMany` fields →
   edges between entities (collection element type resolved from generics, e.g.
-  `List<Purchase>` → `Purchase`).
+  `List<Purchase>` → `Purchase`). The edge `attrs` capture **how** they map:
+  `cascade`, `fetch` (explicit or JPA default), `mappedBy`, owning vs inverse
+  side, `orphanRemoval`, `@JoinColumn`, and `@JoinTable`.
 - **Spring Data repositories**: interfaces extending `JpaRepository<T, ID>`
   (and `CrudRepository`, `PagingAndSortingRepository`, …) → layer `repository`
   plus a `persists` edge to the managed entity `T`.
 
-Query it with `kg_data_model()`; `kg_impact_of` also traverses persistence edges,
-so changing an entity surfaces its repositories and the services that use them.
+Query it with `kg_data_model()` (overview) or `kg_entity(name)` (full mapping of
+one entity). `kg_impact_of` also traverses persistence + relationship edges, so
+changing an entity surfaces its repositories and the services that use them.
 
 ## Sync on remote pushes
 

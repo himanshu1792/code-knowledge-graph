@@ -220,38 +220,72 @@ def render_digest(conn) -> str:
     lines.append("")
 
     # data model (JPA / Hibernate)
+    import json
     entities = conn.execute(
-        "SELECT name, signature FROM nodes WHERE layer='entity' "
+        "SELECT id, name, attrs FROM nodes WHERE layer='entity' "
         "AND kind IN ('class','interface','enum') ORDER BY name"
     ).fetchall()
     if entities:
         lines.append("## Data Model (JPA / Hibernate)")
         lines.append("")
-        lines.append("| Entity | Table |")
-        lines.append("|---|---|")
         for e in entities:
-            table = e["signature"][6:] if (e["signature"] or "").startswith("table=") else ""
-            lines.append(f"| {e['name']} | `{table}` |")
-        lines.append("")
+            a = json.loads(e["attrs"]) if e["attrs"] else {}
+            lines.append(f"### {e['name']} — table `{a.get('table', e['name'])}`")
+            cols = a.get("columns", [])
+            if cols:
+                lines.append("")
+                lines.append("| Column | Type | PK | Constraints |")
+                lines.append("|---|---|---|---|")
+                for c in cols:
+                    flags = []
+                    if c.get("generated"):
+                        flags.append(f"generated={c['generated']}")
+                    if c.get("nullable") is False:
+                        flags.append("not-null")
+                    if c.get("unique"):
+                        flags.append("unique")
+                    if c.get("length"):
+                        flags.append(f"len={c['length']}")
+                    for fl in ("lob", "enumerated", "version", "embedded", "transient"):
+                        if c.get(fl):
+                            flags.append(fl)
+                    lines.append(f"| `{c.get('column')}` | {c.get('type')} | "
+                                 f"{'✓' if c.get('primary_key') else ''} | "
+                                 f"{', '.join(flags)} |")
+            lines.append("")
+
         rels = conn.execute(
-            "SELECT s.name s, d.name d, e.kind k FROM edges e "
+            "SELECT s.name s, d.name d, e.kind k, e.attrs a FROM edges e "
             "JOIN nodes s ON s.id=e.src JOIN nodes d ON d.id=e.dst "
             "WHERE e.kind IN ('one_to_many','many_to_one','one_to_one','many_to_many') "
             "ORDER BY s.name"
         ).fetchall()
         if rels:
-            lines.append("**Relationships**")
+            lines.append("### Relationships")
             lines.append("")
             for r in rels:
-                lines.append(f"- `{r['s']}` —{r['k']}→ `{r['d']}`")
+                a = json.loads(r["a"]) if r["a"] else {}
+                detail = [f"fetch={a.get('fetch')}", "owning" if a.get("owning") else "inverse"]
+                if a.get("mapped_by"):
+                    detail.append(f"mappedBy={a['mapped_by']}")
+                if a.get("cascade"):
+                    detail.append("cascade=" + "|".join(a["cascade"]))
+                if a.get("orphan_removal"):
+                    detail.append("orphanRemoval")
+                if a.get("join_column"):
+                    detail.append(f"join={a['join_column']}")
+                if a.get("join_table"):
+                    detail.append(f"joinTable={a['join_table']}")
+                lines.append(f"- `{r['s']}` —{r['k']}→ `{r['d']}`  ({', '.join(detail)})")
             lines.append("")
+
         repos = conn.execute(
             "SELECT s.name s, d.name d FROM edges e "
             "JOIN nodes s ON s.id=e.src JOIN nodes d ON d.id=e.dst "
             "WHERE e.kind='persists' ORDER BY s.name"
         ).fetchall()
         if repos:
-            lines.append("**Repositories**")
+            lines.append("### Repositories")
             lines.append("")
             for r in repos:
                 lines.append(f"- `{r['s']}` manages `{r['d']}`")

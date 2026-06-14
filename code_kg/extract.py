@@ -435,6 +435,7 @@ def write_structure(conn, classes: list[ClassInfo], symbols: Symbols) -> None:
             "http_method": None,
             "path": None,
             "summary": None,
+            "attrs": None,
         })
         for fi in ci.fields:
             db.upsert_node(conn, {

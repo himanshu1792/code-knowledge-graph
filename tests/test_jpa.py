@@ -89,3 +89,48 @@ def test_impact_of_entity_reaches_repository_and_service(graph):
     res = server.kg_impact_of("Purchase")
     assert "PurchaseRepository" in res["impacted"]
     assert "PurchaseService" in res["impacted"]
+
+
+def test_relation_mapping_detail(graph):
+    server._DB_FILE = graph
+    dm = server.kg_data_model()
+    by = {(r["from"], r["kind"], r["to"]): r for r in dm["relationships"]}
+
+    # Customer.purchases: @OneToMany(mappedBy="customer", cascade=ALL) -> inverse side
+    o2m = by[("Customer", "one_to_many", "Purchase")]
+    assert o2m["owning"] is False
+    assert o2m["mapped_by"] == "customer"
+    assert o2m["cascade"] == ["ALL"]
+    assert o2m["fetch"] == "LAZY"          # *ToMany default
+
+    # Purchase.customer: @ManyToOne @JoinColumn(name="customer_id") -> owning side, EAGER
+    m2o = by[("Purchase", "many_to_one", "Customer")]
+    assert m2o["owning"] is True
+    assert m2o["fetch"] == "EAGER"         # *ToOne default
+    assert m2o["join_column"] == "customer_id"
+
+    # Customer.address: @OneToOne @JoinColumn(name="address_id")
+    o2o = by[("Customer", "one_to_one", "Address")]
+    assert o2o["join_column"] == "address_id"
+
+
+def test_entity_column_mapping(graph):
+    server._DB_FILE = graph
+    ent = server.kg_entity("Customer")
+    assert ent["table"] == "customers"
+    cols = {c["column"]: c for c in ent["columns"]}
+    # @Id @GeneratedValue(strategy=IDENTITY) private Long id;
+    assert cols["id"]["primary_key"] is True
+    assert cols["id"]["generated"] == "IDENTITY"
+    # @Column(nullable=false) private String name;
+    assert cols["name"]["nullable"] is False
+    assert ent["primary_key"] == ["id"] if "primary_key" in ent else True
+
+
+def test_entity_referenced_by(graph):
+    server._DB_FILE = graph
+    ent = server.kg_entity("Customer")
+    # Purchase.customer points at Customer (inbound many_to_one)
+    inbound = {(i["from"], i["kind"]) for i in ent["referenced_by"]}
+    assert ("Purchase", "many_to_one") in inbound
+    assert "PurchaseRepository" not in ent["repositories"]  # repo manages Purchase, not Customer

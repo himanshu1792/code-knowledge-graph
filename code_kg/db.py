@@ -34,13 +34,16 @@ CREATE TABLE IF NOT EXISTS nodes (
     layer       TEXT,               -- controller|service|repository|dao|config|model|util|app|component|null
     http_method TEXT,               -- GET|POST|... for endpoint handler methods
     path        TEXT,               -- resolved http path for endpoint handler methods
-    summary     TEXT                -- one-line summary (enrichment)
+    summary     TEXT,               -- one-line summary (enrichment)
+    attrs       TEXT                -- JSON: structured detail (e.g. JPA column mapping)
 );
 
 CREATE TABLE IF NOT EXISTS edges (
     src  TEXT NOT NULL,
     dst  TEXT NOT NULL,
     kind TEXT NOT NULL,             -- calls|imports|extends|implements|injects|routes_to
+                                    --   |persists|one_to_many|many_to_one|one_to_one|many_to_many
+    attrs TEXT,                     -- JSON: relationship detail (cascade, fetch, mappedBy, ...)
     PRIMARY KEY (src, dst, kind)
 );
 
@@ -110,7 +113,7 @@ def upsert_node(conn: sqlite3.Connection, node: dict) -> None:
     cols = (
         "id", "kind", "name", "file", "package", "signature",
         "start_line", "end_line", "annotations", "layer",
-        "http_method", "path", "summary",
+        "http_method", "path", "summary", "attrs",
     )
     values = [node.get(c) for c in cols]
     placeholders = ", ".join(["?"] * len(cols))
@@ -122,11 +125,17 @@ def upsert_node(conn: sqlite3.Connection, node: dict) -> None:
     )
 
 
-def add_edge(conn: sqlite3.Connection, src: str, dst: str, kind: str) -> None:
+def add_edge(conn: sqlite3.Connection, src: str, dst: str, kind: str,
+             attrs: Optional[str] = None) -> None:
     conn.execute(
-        "INSERT OR IGNORE INTO edges (src, dst, kind) VALUES (?, ?, ?)",
-        (src, dst, kind),
+        "INSERT INTO edges (src, dst, kind, attrs) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(src, dst, kind) DO UPDATE SET attrs=COALESCE(excluded.attrs, attrs)",
+        (src, dst, kind, attrs),
     )
+
+
+def set_node_attrs(conn: sqlite3.Connection, node_id: str, attrs: str) -> None:
+    conn.execute("UPDATE nodes SET attrs = ? WHERE id = ?", (attrs, node_id))
 
 
 def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
