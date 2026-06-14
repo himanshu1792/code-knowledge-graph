@@ -19,6 +19,8 @@ guessing which files to change.**
   any `swagger.json` — docs are often stale/incomplete.)
 - Before changing a class/method → `kg_impact_of("OrderService")` to see what
   depends on it; `kg_callers(...)` / `kg_callees(...)` for direct call edges.
+- Touching the database/persistence layer → `kg_data_model()` for JPA/Hibernate
+  entities, their tables, relationships, and which repository manages each entity.
 - Understanding a symbol → `kg_describe("...")`, `kg_neighbors("...")`.
 
 The graph is the source of truth for structure (classes, endpoints, dependency

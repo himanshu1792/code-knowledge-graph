@@ -176,7 +176,8 @@ def build_fallback_features(conn) -> None:
 
     # adjacency for downstream traversal
     edges = conn.execute(
-        "SELECT src, dst, kind FROM edges WHERE kind IN ('injects','calls','routes_to')"
+        "SELECT src, dst, kind FROM edges "
+        "WHERE kind IN ('injects','calls','routes_to','persists')"
     ).fetchall()
     adj: dict[str, list[str]] = {}
     for e in edges:

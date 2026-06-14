@@ -42,9 +42,16 @@ class Annotation:
 class FieldInfo:
     name: str
     type_simple: Optional[str]
+    type_raw: Optional[str] = None   # full text incl. generics, e.g. "List<Order>"
     annotations: list[Annotation] = field(default_factory=list)
     start_line: int = 0
     end_line: int = 0
+
+    def annotation(self, name: str) -> Optional["Annotation"]:
+        for a in self.annotations:
+            if a.name == name:
+                return a
+        return None
 
 
 @dataclass
@@ -84,6 +91,7 @@ class ClassInfo:
     annotations: list[Annotation] = field(default_factory=list)
     extends: list[str] = field(default_factory=list)      # simple names
     implements: list[str] = field(default_factory=list)   # simple names
+    raw_supertypes: list[str] = field(default_factory=list)  # full text incl. generics
     fields: list[FieldInfo] = field(default_factory=list)
     methods: list[MethodInfo] = field(default_factory=list)
     imports: dict[str, str] = field(default_factory=dict)  # simple -> fqn
@@ -166,6 +174,15 @@ def _type_names_in(src: bytes, node) -> list[str]:
     return names
 
 
+def _raw_types_in(src: bytes, node) -> list[str]:
+    """Full type texts (generics preserved) from a type_list / superclass node."""
+    out: list[str] = []
+    for ch in node.children:
+        if ch.type in ("type_identifier", "scoped_type_identifier", "generic_type"):
+            out.append(_text(src, ch))
+    return out
+
+
 # --- per-file parse ------------------------------------------------------------
 
 def parse_file(abs_path: str, rel_path: str) -> list[ClassInfo]:
@@ -227,23 +244,25 @@ def _parse_type(src, node, package, rel_path, imports) -> ClassInfo:
         end_line=node.end_point[0] + 1,
     )
 
-    sup = node.child_by_field_name("superclass")
-    if sup is not None:
-        ci.extends.extend(_type_names_in(src, sup))
-    for fld in ("interfaces", "super_interfaces"):
-        inode = node.child_by_field_name(fld)
-        if inode is not None:
-            for c in inode.children:
+    # `superclass`, `super_interfaces` (class implements), and `extends_interfaces`
+    # (interface extends) are unnamed children — scan by node type, not field name.
+    for ch in node.children:
+        if ch.type == "superclass":
+            ci.extends.extend(_type_names_in(src, ch))
+            ci.raw_supertypes.extend(_raw_types_in(src, ch))
+        elif ch.type == "super_interfaces":
+            for c in ch.children:
                 if c.type == "type_list":
                     ci.implements.extend(_type_names_in(src, c))
-    # interface `extends`
-    ext = node.child_by_field_name("extends_interfaces")
-    if ext is not None:
-        for c in ext.children:
-            if c.type == "type_list":
-                ci.extends.extend(_type_names_in(src, c))
+                    ci.raw_supertypes.extend(_raw_types_in(src, c))
+        elif ch.type == "extends_interfaces":
+            for c in ch.children:
+                if c.type == "type_list":
+                    ci.extends.extend(_type_names_in(src, c))
+                    ci.raw_supertypes.extend(_raw_types_in(src, c))
 
-    body = node.child_by_field_name("body")
+    body = next((c for c in node.children
+                 if c.type in ("class_body", "interface_body", "enum_body")), None)
     if body is not None:
         for member in body.children:
             if member.type == "field_declaration":
@@ -257,6 +276,7 @@ def _parse_field(src, node) -> list[FieldInfo]:
     anns = _annotations_of(src, node)
     type_node = node.child_by_field_name("type")
     type_simple = _simple_type_name(_text(src, type_node)) if type_node else None
+    type_raw = _text(src, type_node) if type_node else None
     out: list[FieldInfo] = []
     for ch in node.children:
         if ch.type == "variable_declarator":
@@ -265,6 +285,7 @@ def _parse_field(src, node) -> list[FieldInfo]:
                 out.append(FieldInfo(
                     name=_text(src, n),
                     type_simple=type_simple,
+                    type_raw=type_raw,
                     annotations=anns,
                     start_line=node.start_point[0] + 1,
                     end_line=node.end_point[0] + 1,

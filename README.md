@@ -57,6 +57,7 @@ uv run code-kg digest --repo /path/to/target/repo -o ARCHITECTURE.md
 | `kg_endpoints()` / `kg_endpoint(path)` | Endpoints from code + downstream chain |
 | `kg_callers(symbol)` / `kg_callees(symbol)` | Direct call edges |
 | `kg_impact_of(symbol)` | Everything that depends on a symbol (reverse reachability) |
+| `kg_data_model()` | JPA/Hibernate entities, tables, relationships, repository→entity |
 | `kg_neighbors(node)` / `kg_describe(node)` | Node neighborhood / full detail |
 
 Register the server with your agent using `mcp.user.json` (fill in the absolute
@@ -79,7 +80,22 @@ feature_files(feature_id, file, entry_node_id)
   `@RequestMapping` prefix → resolved handler method + `routes_to` edge
   (e.g. class `/api/orders` + method `/sorted` ⇒ `GET /api/orders/sorted`).
 - **DI edges**: constructor-injected params and `@Autowired` fields → `injects`.
-- **Layer**: controller / service / repository / config / dao / model / util.
+- **Layer**: controller / service / repository / config / dao / model / util / entity.
+
+## JPA / Hibernate awareness
+
+On top of the Spring pass, the persistence layer is modeled (`code_kg/jpa.py`):
+
+- **Entities**: `@Entity`/`@Table` classes → layer `entity`, with the table name.
+- **Relationships**: `@OneToMany`/`@ManyToOne`/`@OneToOne`/`@ManyToMany` fields →
+  edges between entities (collection element type resolved from generics, e.g.
+  `List<Purchase>` → `Purchase`).
+- **Spring Data repositories**: interfaces extending `JpaRepository<T, ID>`
+  (and `CrudRepository`, `PagingAndSortingRepository`, …) → layer `repository`
+  plus a `persists` edge to the managed entity `T`.
+
+Query it with `kg_data_model()`; `kg_impact_of` also traverses persistence edges,
+so changing an entity surfaces its repositories and the services that use them.
 
 ## Sync on remote pushes
 

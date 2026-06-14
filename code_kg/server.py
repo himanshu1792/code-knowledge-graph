@@ -270,7 +270,12 @@ def kg_impact_of(symbol: str) -> dict:
         if not base:
             return {"symbol": symbol, "error": "symbol not found", "impacted": []}
         start = _expand_members(conn, base)
-        reached = _reachable(conn, start, ("calls", "injects", "routes_to"), forward=False)
+        reached = _reachable(
+            conn, start,
+            ("calls", "injects", "routes_to", "persists",
+             "one_to_many", "many_to_one", "one_to_one", "many_to_many"),
+            forward=False,
+        )
         reached -= start
         self_classes = {_owner_class(s) for s in start}
         impacted = sorted({_owner_class(r) for r in reached} - self_classes)
@@ -322,6 +327,43 @@ def kg_describe(node: str) -> dict:
                 for m in methods
             ]
         return d
+
+
+@mcp.tool()
+def kg_data_model() -> dict:
+    """The JPA/Hibernate persistence model: entities (+ table), relationships,
+    and which Spring Data repository manages each entity.
+
+    Use this for tasks involving the database layer, schema, or queries.
+    """
+    _REL = ("one_to_many", "many_to_one", "one_to_one", "many_to_many")
+    with _conn() as conn:
+        entities = []
+        for r in conn.execute(
+            "SELECT id, name, file, signature FROM nodes WHERE layer = 'entity' "
+            "AND kind IN ('class','interface','enum') ORDER BY name"
+        ):
+            table = None
+            if r["signature"] and r["signature"].startswith("table="):
+                table = r["signature"][len("table="):]
+            entities.append({"entity": r["name"], "table": table, "file": r["file"]})
+
+        placeholders = ",".join("?" * len(_REL))
+        relationships = [
+            {"from": _node_brief(conn, r["src"])["name"],
+             "kind": r["kind"],
+             "to": _node_brief(conn, r["dst"]).get("name")}
+            for r in conn.execute(
+                f"SELECT src, dst, kind FROM edges WHERE kind IN ({placeholders})", _REL
+            )
+        ]
+        repositories = [
+            {"repository": _node_brief(conn, r["src"])["name"],
+             "manages_entity": _node_brief(conn, r["dst"]).get("name")}
+            for r in conn.execute("SELECT src, dst FROM edges WHERE kind = 'persists'")
+        ]
+    return {"entities": entities, "relationships": relationships,
+            "repositories": repositories}
 
 
 # --- graph traversal -----------------------------------------------------------

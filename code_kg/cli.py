@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Optional
 
-from . import db, extract, spring
+from . import db, extract, jpa, spring
 
 
 # --- helpers -------------------------------------------------------------------
@@ -43,6 +43,7 @@ def build_graph(conn, source_root: str) -> dict:
     db.reset(conn)
     extract.write_structure(conn, classes, symbols)
     spring.apply(conn, classes, symbols)
+    jpa.apply(conn, classes, symbols)
     spring.build_fallback_features(conn)
 
     db.set_meta(conn, "source_root", os.path.abspath(source_root))
@@ -217,6 +218,44 @@ def render_digest(conn) -> str:
     for r in di:
         lines.append(f"- `{r['src']}` → `{r['dst']}`")
     lines.append("")
+
+    # data model (JPA / Hibernate)
+    entities = conn.execute(
+        "SELECT name, signature FROM nodes WHERE layer='entity' "
+        "AND kind IN ('class','interface','enum') ORDER BY name"
+    ).fetchall()
+    if entities:
+        lines.append("## Data Model (JPA / Hibernate)")
+        lines.append("")
+        lines.append("| Entity | Table |")
+        lines.append("|---|---|")
+        for e in entities:
+            table = e["signature"][6:] if (e["signature"] or "").startswith("table=") else ""
+            lines.append(f"| {e['name']} | `{table}` |")
+        lines.append("")
+        rels = conn.execute(
+            "SELECT s.name s, d.name d, e.kind k FROM edges e "
+            "JOIN nodes s ON s.id=e.src JOIN nodes d ON d.id=e.dst "
+            "WHERE e.kind IN ('one_to_many','many_to_one','one_to_one','many_to_many') "
+            "ORDER BY s.name"
+        ).fetchall()
+        if rels:
+            lines.append("**Relationships**")
+            lines.append("")
+            for r in rels:
+                lines.append(f"- `{r['s']}` —{r['k']}→ `{r['d']}`")
+            lines.append("")
+        repos = conn.execute(
+            "SELECT s.name s, d.name d FROM edges e "
+            "JOIN nodes s ON s.id=e.src JOIN nodes d ON d.id=e.dst "
+            "WHERE e.kind='persists' ORDER BY s.name"
+        ).fetchall()
+        if repos:
+            lines.append("**Repositories**")
+            lines.append("")
+            for r in repos:
+                lines.append(f"- `{r['s']}` manages `{r['d']}`")
+            lines.append("")
 
     # features
     feats = conn.execute("SELECT id, name, description FROM features ORDER BY name").fetchall()
