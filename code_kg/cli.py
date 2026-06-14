@@ -118,7 +118,13 @@ def cmd_enrich(args) -> int:
     conn = db.connect(db_file)
     db.init_schema(conn)
     try:
-        report = enrich.enrich(conn, model=args.model, api_key=args.api_key)
+        report = enrich.enrich(
+            conn,
+            deployment=args.deployment,
+            api_key=args.api_key,
+            endpoint=args.endpoint,
+            api_version=args.api_version,
+        )
     except RuntimeError as e:
         print(f"Enrichment skipped: {e}", file=sys.stderr)
         conn.close()
@@ -337,11 +343,16 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--db", help="explicit graph.db path")
     pr.set_defaults(func=cmd_reindex)
 
-    pe = sub.add_parser("enrich", help="optional LLM enrichment pass")
+    pe = sub.add_parser("enrich", help="optional LLM enrichment pass (Azure OpenAI)")
     pe.add_argument("--repo", help="repo root (to locate graph.db)")
     pe.add_argument("--db", help="explicit graph.db path")
-    pe.add_argument("--model", default="claude-haiku-4-5", help="Claude model id")
-    pe.add_argument("--api-key", help="Anthropic API key (else $ANTHROPIC_API_KEY)")
+    pe.add_argument("--deployment", help="Azure OpenAI deployment name "
+                                         "(else $AZURE_OPENAI_DEPLOYMENT)")
+    pe.add_argument("--endpoint", help="Azure OpenAI endpoint "
+                                       "(else $AZURE_OPENAI_ENDPOINT)")
+    pe.add_argument("--api-version", help="Azure OpenAI API version "
+                                          "(else $AZURE_OPENAI_API_VERSION)")
+    pe.add_argument("--api-key", help="Azure OpenAI key (else $AZURE_OPENAI_API_KEY)")
     pe.set_defaults(func=cmd_enrich)
 
     ps = sub.add_parser("serve", help="run the MCP server over the graph")

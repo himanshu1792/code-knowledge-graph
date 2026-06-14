@@ -1,12 +1,19 @@
-"""LLM enrichment pass (optional, high-value).
+"""LLM enrichment pass (optional, high-value) — Azure OpenAI.
 
-Adds per-node one-line summaries and a feature/capability -> files map, using the
-Claude API. **Hard anti-hallucination constraint:** enrichment may only reference
-node IDs / files that already exist in SQLite. Every write is validated against the
-live graph and rejected otherwise — the LLM cannot invent files or symbols.
+Adds per-node one-line summaries and a feature/capability -> files map, using an
+Azure OpenAI chat deployment. **Hard anti-hallucination constraint:** enrichment
+may only reference node IDs / files that already exist in SQLite. Every write is
+validated against the live graph and rejected otherwise — the model cannot invent
+files or symbols.
 
-The pass is entirely optional: if no API key is configured (or ``--no-llm`` is
-used), callers fall back to the deterministic feature map in ``spring.py``.
+The pass is entirely optional: if Azure OpenAI is not configured, callers fall
+back to the deterministic feature map in ``spring.py``.
+
+Configuration (env vars, or pass explicitly to ``enrich``):
+  AZURE_OPENAI_API_KEY      — the Azure OpenAI key
+  AZURE_OPENAI_ENDPOINT     — e.g. https://my-resource.openai.azure.com
+  AZURE_OPENAI_DEPLOYMENT   — the chat model *deployment* name (used as `model`)
+  AZURE_OPENAI_API_VERSION  — defaults to 2024-10-21
 """
 
 from __future__ import annotations
@@ -15,7 +22,8 @@ import json
 import os
 from typing import Optional
 
-DEFAULT_MODEL = "claude-haiku-4-5"
+DEFAULT_API_VERSION = "2024-10-21"
+DEFAULT_DEPLOYMENT = "gpt-4o-mini"
 
 
 class EnrichmentRejected(Exception):
@@ -105,66 +113,56 @@ _SYSTEM = (
     "endpoints already extracted deterministically from the code. "
     "You must ONLY reference files and node ids from that set — never invent names. "
     "Group the codebase into user-facing features/capabilities, and for each feature "
-    "list the files that implement it (entry node id where applicable)."
+    "list the files that implement it (entry node id where applicable). "
+    "Respond with a single JSON object of the form "
+    '{"features": [{"name": str, "description": str, "files": [str], '
+    '"entry_node_id": str (optional)}]}.'
 )
 
 
-def enrich(conn, model: str = DEFAULT_MODEL, api_key: Optional[str] = None) -> dict:
-    """Run the LLM enrichment pass. Returns a small report dict.
+def enrich(
+    conn,
+    deployment: Optional[str] = None,
+    api_key: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    api_version: Optional[str] = None,
+) -> dict:
+    """Run the Azure OpenAI enrichment pass. Returns a small report dict.
 
     Validates every write through the anti-hallucination gate. Writes that
     reference unknown nodes/files are skipped and counted in the report.
     """
-    import anthropic
+    from openai import AzureOpenAI
 
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
+    key = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
+    endpoint = endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+    deployment = deployment or os.environ.get("AZURE_OPENAI_DEPLOYMENT") or DEFAULT_DEPLOYMENT
+    api_version = api_version or os.environ.get("AZURE_OPENAI_API_VERSION") or DEFAULT_API_VERSION
+    if not key or not endpoint:
         raise RuntimeError(
-            "no ANTHROPIC_API_KEY set; run without enrichment or provide a key"
+            "Azure OpenAI not configured; set AZURE_OPENAI_API_KEY and "
+            "AZURE_OPENAI_ENDPOINT (and AZURE_OPENAI_DEPLOYMENT), or run without enrichment"
         )
 
-    client = anthropic.Anthropic(api_key=key)
+    client = AzureOpenAI(api_key=key, azure_endpoint=endpoint, api_version=api_version)
     payload = _context_payload(conn)
 
-    schema = {
-        "type": "object",
-        "properties": {
-            "features": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "description": {"type": "string"},
-                        "files": {"type": "array", "items": {"type": "string"}},
-                        "entry_node_id": {"type": "string"},
-                    },
-                    "required": ["name", "description", "files"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        "required": ["features"],
-        "additionalProperties": False,
-    }
-
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=_SYSTEM,
-        output_config={"format": {"type": "json_schema", "schema": schema}},
+    response = client.chat.completions.create(
+        model=deployment,  # Azure: this is the *deployment* name
+        response_format={"type": "json_object"},
         messages=[
+            {"role": "system", "content": _SYSTEM},
             {
                 "role": "user",
                 "content": (
-                    "Here is the ground-truth graph context (classes + endpoints). "
-                    "Produce the feature map.\n\n"
+                    "Here is the ground-truth graph context (classes + endpoints) as JSON. "
+                    "Produce the feature map JSON described in the system message.\n\n"
                     + json.dumps(payload, indent=2)
                 ),
-            }
+            },
         ],
     )
-    text = next((b.text for b in response.content if b.type == "text"), "{}")
+    text = response.choices[0].message.content or "{}"
     data = json.loads(text)
 
     written, rejected = 0, 0
@@ -182,7 +180,7 @@ def enrich(conn, model: str = DEFAULT_MODEL, api_key: Optional[str] = None) -> d
             write_feature(
                 conn,
                 fid,
-                feat["name"],
+                feat.get("name", fid),
                 feat.get("description", ""),
                 feat.get("files", []),
                 entry_nodes,

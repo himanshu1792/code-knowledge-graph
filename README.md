@@ -26,7 +26,8 @@ Requires Python ≥ 3.11 and [`uv`](https://docs.astral.sh/uv/).
 uv sync
 ```
 
-Dependencies: `tree-sitter`, `tree-sitter-java`, `mcp[cli]` (FastMCP), `anthropic`.
+Dependencies: `tree-sitter`, `tree-sitter-java`, `mcp[cli]` (FastMCP), `openai`
+(Azure OpenAI client, used only by the optional `enrich` pass).
 
 ## Usage
 
@@ -35,8 +36,11 @@ Dependencies: `tree-sitter`, `tree-sitter-java`, `mcp[cli]` (FastMCP), `anthropi
 uv run code-kg index /path/to/target/repo/src/main/java
 #    → writes <repo>/.code-kg/graph.db  (gitignored, rebuilt on demand)
 
-# 2. (optional) LLM enrichment: per-class summaries + feature→files map
-ANTHROPIC_API_KEY=sk-... uv run code-kg enrich --repo /path/to/target/repo
+# 2. (optional) LLM enrichment via Azure OpenAI: feature→files map + summaries
+export AZURE_OPENAI_API_KEY=...                       # Azure OpenAI key
+export AZURE_OPENAI_ENDPOINT=https://<res>.openai.azure.com
+export AZURE_OPENAI_DEPLOYMENT=<chat-deployment-name> # e.g. gpt-4o-mini
+uv run code-kg enrich --repo /path/to/target/repo
 
 # 3. Serve the graph to agents over MCP
 uv run code-kg serve --repo /path/to/target/repo
