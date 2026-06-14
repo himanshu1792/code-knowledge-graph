@@ -2,11 +2,11 @@
 .code-kg/
 **/.code-kg/
 
-# python / uv
+# node
+node_modules/
+npm-debug.log*
+
+# python (legacy)
 __pycache__/
 *.pyc
 .venv/
-.uv/
-dist/
-build/
-*.egg-info/

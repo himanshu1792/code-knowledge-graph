@@ -1,0 +1,27 @@
+{
+  "name": "code-kg",
+  "version": "0.2.0",
+  "description": "Code knowledge-graph tool for agents: deterministic tree-sitter + Spring/JPA/React extraction into SQLite, served over MCP. Node.js.",
+  "type": "module",
+  "bin": {
+    "code-kg": "src/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "openai": "^4.0.0",
+    "tree-sitter": "^0.21.0",
+    "tree-sitter-java": "^0.23.0",
+    "tree-sitter-typescript": "^0.23.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "docx": "^9.7.1",
+    "pptxgenjs": "^4.0.1"
+  }
+}

@@ -4,9 +4,11 @@ applyTo: '**'
 
 # Use the code knowledge graph before guessing
 
-A pre-computed, accurate knowledge graph of this codebase is available through the
-`code-kg` MCP server. It is built deterministically from the source (tree-sitter +
-Spring annotations), so it does **not** hallucinate files or symbols.
+A pre-computed, accurate knowledge graph of this codebase (Java/Spring + JPA
+backends and React frontends, across microservices) is available through the
+`code-kg` MCP server. It is built deterministically from the source (tree-sitter
++ Spring/JPA annotations + React AST), so it does **not** hallucinate files or
+symbols.
 
 **At the start of any task that touches this codebase, query the graph instead of
 guessing which files to change.**
@@ -23,9 +25,10 @@ guessing which files to change.**
   entities, tables, relationships (cascade/fetch/owning side), and repositories;
   `kg_entity("Customer")` for one entity's full column + relationship mapping.
 - Understanding a symbol → `kg_describe("...")`, `kg_neighbors("...")`.
-- Multi-service codebase (federated graph) → `kg_service_map()` for which service
-  calls which, and `kg_request_flow("/api/...")` to trace a request across
-  service boundaries (Feign / RestTemplate calls are linked as `calls_remote`).
+- Multi-service / full-stack codebase (federated graph) → `kg_service_map()` for
+  which service (or frontend) calls which, and `kg_request_flow("/api/...")` to
+  trace a request across service boundaries — including React `fetch`/`axios`
+  calls into backend endpoints (all linked as `calls_remote`).
 
 The graph is the source of truth for structure (classes, endpoints, dependency
 injection, call/impact relationships). Use it first; fall back to reading files

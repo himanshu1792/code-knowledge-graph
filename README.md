@@ -1,186 +1,167 @@
-# code-kg — a code knowledge graph for agents
+# code-kg — a code knowledge graph for agents (Node.js)
 
-Pre-compute an accurate, queryable knowledge graph of a Java/Spring codebase
-**once**, then let coding agents query it at task start instead of guessing which
-files to change.
+Pre-compute an accurate, queryable knowledge graph of a **Java/Spring Boot +
+Hibernate/JPA backend and a React frontend** — across multiple microservices —
+then serve it to coding agents over **MCP** so they stop guessing which files to
+change and can trace request/data flow across the whole ecosystem.
 
-The graph is built **deterministically** (tree-sitter for structure + a Spring
-annotation pass for endpoints/DI/layers), stored in local **SQLite**, and served
-to agents over **MCP**. An optional LLM enrichment pass adds summaries and a
-feature→files map — constrained so it can only reference symbols that already
-exist in the graph (no hallucinated files).
+The graph is built **deterministically** with tree-sitter (Java + TSX grammars)
+plus annotation/AST passes, stored in local **SQLite** (`node:sqlite`, no native
+DB), and served via the official **MCP SDK**. An optional LLM enrichment pass
+(**Azure OpenAI**) adds a feature→files map and one-line summaries — constrained
+so it can only reference symbols that already exist (no hallucinated files).
 
 ```
-index source ──▶ [1] Extractor (tree-sitter)  ──▶ SQLite (nodes/edges)
-                 [2] Spring pass (annotations) ──▶ SQLite (endpoints, DI, layers)
-                 [3] Enrichment (LLM, optional) ─▶ SQLite (summaries, features)
-                 [4] MCP server  ◀── agents query (kg_* tools)
-                 [5] Sync: reindex command
+index source ─▶ [1] Extractor (tree-sitter: Java + React/TSX) ─▶ SQLite (nodes/edges)
+                [2] Spring pass        (endpoints, DI, layers)
+                [2b] JPA/Hibernate pass (entities, mapping, repos)
+                [2c] Outbound pass      (Feign/RestTemplate + React fetch/axios)
+                [3] Enrichment (Azure OpenAI, optional) (features, summaries)
+                [4] MCP server  ◀── agents query (kg_* tools)
+                [5] federate    (merge services + link frontend↔backend)
 ```
 
-## Install
+## Requirements
 
-Requires Python ≥ 3.11 and [`uv`](https://docs.astral.sh/uv/).
+- **Node.js ≥ 22** (uses the built-in `node:sqlite`).
+- `npm install` (deps: `tree-sitter` + `tree-sitter-java` + `tree-sitter-typescript`,
+  `@modelcontextprotocol/sdk`, `zod`, `openai`).
 
 ```bash
-uv sync
+npm install
 ```
 
-Dependencies: `tree-sitter`, `tree-sitter-java`, `mcp[cli]` (FastMCP), `openai`
-(Azure OpenAI client, used only by the optional `enrich` pass).
+## How to run
 
-## Usage
+The CLI is `node src/cli.js <command>` (or wire up the `code-kg` bin via
+`npm link`). Commands: `index | reindex | enrich | serve | digest | federate`.
+
+### Single service
 
 ```bash
-# 1. Build the graph for a target repo (point at its Java source root)
-uv run code-kg index /path/to/target/repo/src/main/java
-#    → writes <repo>/.code-kg/graph.db  (gitignored, rebuilt on demand)
+# Index a backend service (point at the repo root or its source dir)
+node src/cli.js index /path/to/order-service --service order-service
+#   → writes /path/to/order-service/.code-kg/graph.db  (gitignored)
 
-# 2. (optional) LLM enrichment via Azure OpenAI: feature→files map + summaries
-export AZURE_OPENAI_API_KEY=...                       # Azure OpenAI key
-export AZURE_OPENAI_ENDPOINT=https://<res>.openai.azure.com
-export AZURE_OPENAI_DEPLOYMENT=<chat-deployment-name> # e.g. gpt-4o-mini
-uv run code-kg enrich --repo /path/to/target/repo
+# Serve it to agents over MCP
+node src/cli.js serve --repo /path/to/order-service
 
-# 3. Serve the graph to agents over MCP
-uv run code-kg serve --repo /path/to/target/repo
+# Re-index after edits (incremental; detects changed files)
+node src/cli.js reindex --repo /path/to/order-service
 
-# 4. Re-index after edits (incremental: detects changed files)
-uv run code-kg reindex --repo /path/to/target/repo
-
-# 5. Human-readable digest
-uv run code-kg digest --repo /path/to/target/repo -o ARCHITECTURE.md
+# Human-readable digest
+node src/cli.js digest --repo /path/to/order-service -o ARCHITECTURE.md
 ```
 
-## MCP tools (the payoff)
+### Multiple services + a React frontend (federated)
+
+Index each service/app independently (order-independent), then **federate** to
+link them — one MCP then exposes every service plus the cross-tier links.
+
+```bash
+node src/cli.js index /path/to/web-ui        --service web-ui
+node src/cli.js index /path/to/user-service  --service user-service
+node src/cli.js index /path/to/login-service --service login-service
+
+node src/cli.js federate /path/to/web-ui /path/to/user-service /path/to/login-service -o federated.db
+
+node src/cli.js serve --db federated.db      # one MCP, all of frontend + backends
+```
+
+### Optional LLM enrichment (Azure OpenAI)
+
+```bash
+export AZURE_OPENAI_API_KEY=...
+export AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com
+export AZURE_OPENAI_DEPLOYMENT=<chat-deployment>   # e.g. gpt-4o-mini
+node src/cli.js enrich --repo /path/to/service     # or --db federated.db
+```
+
+## MCP tools
 
 | Tool | What it answers |
 |---|---|
 | `kg_architecture()` | Layered overview: counts, layers, endpoints |
-| `kg_find_files_for_feature(query)` | Files + entry methods for a capability (kills file-guessing) |
-| `kg_endpoints()` / `kg_endpoint(path)` | Endpoints from code + downstream chain |
+| `kg_find_files_for_feature(query)` | Files + entry points for a capability |
+| `kg_endpoints()` / `kg_endpoint(path)` | Endpoints + downstream chain |
 | `kg_callers(symbol)` / `kg_callees(symbol)` | Direct call edges |
-| `kg_impact_of(symbol)` | Everything that depends on a symbol (reverse reachability) |
-| `kg_data_model()` | JPA/Hibernate entities, tables, relationships (cascade/fetch/owning), repository→entity |
-| `kg_entity(name)` | Full mapping of one entity: columns, PK, relationships, repositories |
-| `kg_neighbors(node)` / `kg_describe(node)` | Node neighborhood / full detail |
-| `kg_service_map()` | Service→service dependency map (federated graph) |
+| `kg_impact_of(symbol)` | What depends on a symbol (reverse reachability, cross-service) |
+| `kg_data_model()` / `kg_entity(name)` | JPA/Hibernate entities, tables, relationship mapping |
+| `kg_service_map()` | Service→service dependency map (frontend + backends) |
 | `kg_request_flow(path)` | Trace a request through the call chain, across services |
+| `kg_neighbors(node)` / `kg_describe(node)` | Node neighborhood / full detail |
 
-Register the server with your agent using `mcp.user.json` (fill in the absolute
-paths). Drop `instructions/knowledge-graph-usage.instructions.md` into the
-agent's instructions so it queries `kg_*` before guessing.
+Register the server with your agent via `mcp.user.json` (fill in absolute paths),
+and drop `instructions/knowledge-graph-usage.instructions.md` into the agent's
+instructions so it queries `kg_*` before guessing.
+
+## What each pass extracts
+
+- **Java/Spring**: classes/methods/fields; `calls`/`imports`/`extends`/`implements`
+  edges; endpoints (`@GetMapping` + class `@RequestMapping` prefix → `routes_to`);
+  DI (`injects`, constructor + `@Autowired`); layer classification.
+- **JPA/Hibernate**: `@Entity` + table; relationship edges
+  (`@OneToMany`/`@ManyToOne`/`@OneToOne`/`@ManyToMany`) with `cascade`/`fetch`/
+  `mappedBy`/owning side/`@JoinColumn`/`@JoinTable`; `JpaRepository<T,ID>` →
+  `persists` edge to the managed entity; per-column mapping (`@Id`,
+  `@GeneratedValue`, `@Column` constraints) in node `attrs`.
+- **React**: `component` nodes (function/arrow/class), `module` nodes, `uses_hook`
+  edges (`useState`/`useEffect`/custom `use*`), `renders` edges (JSX usage), and
+  **`fetch`/`axios` calls → `calls_service`** edges so the frontend links to
+  backend endpoints.
+- **Outbound (cross-service)**: backend OpenFeign + RestTemplate, frontend
+  fetch/axios. Each is a `calls_service` edge with `{target_service, method, path}`.
+
+## Federation
+
+`federate` merges per-service graphs — node ids namespaced `<service>::…` so they
+never collide — and matches each outbound `calls_service` call to the called
+service's real endpoint handler, linking them with a `calls_remote` edge:
+
+- Backend→backend: a Feign `name` / RestTemplate host must equal the called
+  service's `--service` name.
+- **Frontend→backend**: a React `fetch('/api/...')` uses a relative URL, so it
+  matches **any** backend endpoint by HTTP method + path.
+
+Indexing order does not matter; re-run `federate` after re-indexing any service.
+`kg_impact_of` and `kg_request_flow` traverse `calls_remote`, so impact and
+request flow span both service boundaries and the frontend↔backend boundary.
 
 ## Schema
 
 ```
 nodes(id, kind, name, file, package, signature, start_line, end_line,
-      annotations, layer, http_method, path, summary)
-edges(src, dst, kind)        -- calls|imports|extends|implements|injects|routes_to
+      annotations, layer, http_method, path, summary, attrs, service)
+edges(src, dst, kind, attrs)
+  -- kind: calls|imports|extends|implements|injects|routes_to|persists
+  --       |one_to_many|many_to_one|one_to_one|many_to_many
+  --       |calls_service|calls_remote|renders|uses_hook
 features(id, name, description)
 feature_files(feature_id, file, entry_node_id)
 ```
 
-## What the Spring pass adds over generic extraction
-
-- **Endpoints**: `@GetMapping`/`@PostMapping`/… concatenated with class-level
-  `@RequestMapping` prefix → resolved handler method + `routes_to` edge
-  (e.g. class `/api/orders` + method `/sorted` ⇒ `GET /api/orders/sorted`).
-- **DI edges**: constructor-injected params and `@Autowired` fields → `injects`.
-- **Layer**: controller / service / repository / config / dao / model / util / entity.
-
-## JPA / Hibernate awareness
-
-On top of the Spring pass, the persistence layer is modeled (`code_kg/jpa.py`):
-
-- **Entities**: `@Entity`/`@Table` classes → layer `entity`, with the table name.
-  Each column carries its mapping in `attrs` (JSON): primary key (`@Id`),
-  generation strategy (`@GeneratedValue`), and `@Column` constraints
-  (name/nullable/unique/length), plus `@Lob`/`@Enumerated`/`@Version`/`@Transient`.
-- **Relationships**: `@OneToMany`/`@ManyToOne`/`@OneToOne`/`@ManyToMany` fields →
-  edges between entities (collection element type resolved from generics, e.g.
-  `List<Purchase>` → `Purchase`). The edge `attrs` capture **how** they map:
-  `cascade`, `fetch` (explicit or JPA default), `mappedBy`, owning vs inverse
-  side, `orphanRemoval`, `@JoinColumn`, and `@JoinTable`.
-- **Spring Data repositories**: interfaces extending `JpaRepository<T, ID>`
-  (and `CrudRepository`, `PagingAndSortingRepository`, …) → layer `repository`
-  plus a `persists` edge to the managed entity `T`.
-
-Query it with `kg_data_model()` (overview) or `kg_entity(name)` (full mapping of
-one entity). `kg_impact_of` also traverses persistence + relationship edges, so
-changing an entity surfaces its repositories and the services that use them.
-
-## Multiple microservices (cross-service flow)
-
-Index each service independently, then **federate** to link them so an agent can
-trace a request/data flow across services from a single MCP.
-
-```bash
-# 1. Index each service (order-independent), naming each one
-uv run code-kg index /path/to/login-service/src/main/java --service login-service
-uv run code-kg index /path/to/user-service/src/main/java  --service user-service
-
-# 2. Merge + link cross-service calls into one graph
-uv run code-kg federate /path/to/login-service /path/to/user-service -o federated.db
-
-# 3. Serve the federated graph (one MCP exposes ALL services + the links)
-uv run code-kg serve --db federated.db
-```
-
-- **Outbound calls** are detected per service: OpenFeign (`@FeignClient(name=…)`
-  interfaces) and `RestTemplate` (`getForObject`/`postForObject`/… to
-  `http://<service>/<path>`). Each is recorded as a `calls_service` edge.
-- **`federate`** namespaces every node by service (`<service>::…`) so ids never
-  collide, then matches each outbound call to the called service's real endpoint
-  handler and links them with a `calls_remote` edge. Indexing order does not
-  matter; re-run `federate` after re-indexing any service.
-- **Contract:** a Feign `name` / RestTemplate host must equal the called
-  service's `--service` name. Unmatched calls stay visible as *unresolved* in
-  `kg_service_map()`.
-- `kg_impact_of` and `kg_request_flow` traverse `calls_remote`, so impact and
-  request flow span service boundaries.
-
 ## Sync on remote pushes
 
-A watcher only sees local edits. For repos updated by remote pushes, run a cron
-job that periodically `git pull`s and runs `code-kg reindex`, rebuilding
-`graph.db` in place.
-
-## Scope / non-goals (this phase)
-
-Java/Spring Boot first. Polyglot support, graph-DB backends (Neo4j/FalkorDB), and
-GraphRAG/embeddings are deferred — the SQLite schema + MCP boundary are designed
-so those can be added later without changing the `kg_*` interface.
-
-## Future enhancements (roadmap)
-
-These are designed-for but not yet built. The current schema (`nodes`/`edges`
-with JSON `attrs`) + the `kg_*` MCP boundary are intended to absorb them without
-a redesign.
-
-- **GraphRAG / semantic discovery.** Today symbol/feature lookup is
-  keyword-based. Add an embeddings index (e.g. an Azure OpenAI embeddings
-  deployment) over node summaries/signatures and the code at each `file:line`,
-  then a **hybrid retriever**: semantic search finds seed nodes, and we expand
-  along the existing edges (`calls`/`injects`/`routes_to`/`persists`/`calls_remote`)
-  to pull the connected subgraph + cross-service flow. Expose as `kg_search`
-  (fuzzy "where is X") and `kg_ask("how does login work?")` that answers grounded
-  in the retrieved subgraph + real code. *Highest-value piece: semantic discovery
-  when you don't know the exact symbol name; the NL "answerer" mainly benefits a
-  human-facing chatbot more than a tool-using coding agent.*
-- **Wider cross-service coverage.** Add WebClient and message-driven flows
-  (`@KafkaListener` / producers, Rabbit) so federation captures async hops, not
-  just Feign + RestTemplate.
-- **Compiler-accurate call graph.** Back `calls`/`kg_impact_of` with a
-  compiler-grade index (e.g. scip-java) instead of heuristic name resolution, for
-  precise impact analysis on overloads/generics/inheritance.
-- **Per-method summaries.** Extend enrichment beyond classes/endpoints to
-  method-level one-liners.
-- **Polyglot + graph-DB backend.** Additional languages and an optional
-  Neo4j/FalkorDB backend behind the same `kg_*` interface.
+A watcher only sees local edits. For repos updated by remote pushes (ADO/GitHub),
+run a cron job that periodically `git pull`s, runs `reindex` per service, and
+re-runs `federate`, rebuilding the merged graph in place.
 
 ## Development
 
 ```bash
-uv run pytest          # runs tests against the bundled Java fixture
+npm test          # node --test, against the bundled Java + React fixtures
 ```
+
+## Future enhancements (roadmap)
+
+Designed-for but not yet built — the `nodes`/`edges`+`attrs` schema and `kg_*`
+MCP boundary are meant to absorb these without a redesign.
+
+- **GraphRAG / semantic discovery.** Embeddings index over node summaries +
+  code, with a hybrid retriever (semantic seed → graph-edge expansion) exposed as
+  `kg_search` / `kg_ask`. Highest value: fuzzy "where is X" lookup.
+- **Wider coverage.** WebClient and message-driven flows (`@KafkaListener` /
+  producers) on the backend; react-router / Next.js routes and prop/context data
+  flow on the frontend.
+- **Compiler-accurate call graph** (e.g. scip-java) backing `kg_impact_of`.
+- **Per-method summaries**, polyglot support, optional Neo4j/FalkorDB backend.

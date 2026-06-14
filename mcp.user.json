@@ -1,15 +1,12 @@
 {
   "mcpServers": {
     "code-kg": {
-      "command": "uv",
+      "command": "node",
       "args": [
-        "run",
-        "--directory",
-        "/absolute/path/to/code-knowledge-graph",
-        "code-kg",
+        "/absolute/path/to/code-knowledge-graph/src/cli.js",
         "serve",
-        "--repo",
-        "/absolute/path/to/target/repo"
+        "--db",
+        "/absolute/path/to/federated.db"
       ]
     }
   }
