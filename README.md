@@ -105,9 +105,13 @@ instructions so it queries `kg_*` before guessing.
   `mappedBy`/owning side/`@JoinColumn`/`@JoinTable`; `JpaRepository<T,ID>` →
   `persists` edge to the managed entity; per-column mapping (`@Id`,
   `@GeneratedValue`, `@Column` constraints) in node `attrs`.
-- **React**: `component` nodes (function/arrow/class), `module` nodes, `uses_hook`
-  edges (`useState`/`useEffect`/custom `use*`), `renders` edges (JSX usage), and
-  **`fetch`/`axios` calls → `calls_service`** edges so the frontend links to
+- **React**: `component` nodes (function/arrow/class, with their prop list),
+  `module` nodes, `uses_hook` edges (`useState`/`useEffect`/custom `use*`),
+  `renders` + `passes_prop` edges (JSX usage + prop names), **routing**
+  (`route` nodes from react-router `<Route path element>` and Next.js
+  file-based `pages/`·`app/`, linked `route → component` via `routes_to`),
+  **context** (`createContext` nodes + `uses_context`/`provides_context` edges),
+  and **`fetch`/`axios` calls → `calls_service`** edges so the frontend links to
   backend endpoints.
 - **Outbound (cross-service)**: backend OpenFeign + RestTemplate, frontend
   fetch/axios. Each is a `calls_service` edge with `{target_service, method, path}`.
@@ -161,7 +165,8 @@ MCP boundary are meant to absorb these without a redesign.
   code, with a hybrid retriever (semantic seed → graph-edge expansion) exposed as
   `kg_search` / `kg_ask`. Highest value: fuzzy "where is X" lookup.
 - **Wider coverage.** WebClient and message-driven flows (`@KafkaListener` /
-  producers) on the backend; react-router / Next.js routes and prop/context data
-  flow on the frontend.
+  producers) on the backend; Next.js `pages/api/*` route handlers as backend
+  endpoints; prop/context value-level data-flow (which value flows where) on the
+  frontend.
 - **Compiler-accurate call graph** (e.g. scip-java) backing `kg_impact_of`.
 - **Per-method summaries**, polyglot support, optional Neo4j/FalkorDB backend.

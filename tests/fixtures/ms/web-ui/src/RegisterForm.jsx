@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import axios from 'axios';
+import { AuthContext } from './AuthContext.jsx';
 
-export function RegisterForm() {
+export function RegisterForm({ title }) {
   const [status, setStatus] = useState('');
+  const auth = useContext(AuthContext);
 
   useEffect(() => {
     axios.get('/auth/validate');
@@ -16,5 +18,5 @@ export function RegisterForm() {
     setStatus(await res.text());
   }
 
-  return <button onClick={() => submit('user:pw')}>Register {status}</button>;
+  return <button onClick={() => submit('user:pw')}>{title} {status}</button>;
 }

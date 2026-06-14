@@ -5,7 +5,7 @@ export default function App() {
   return (
     <div className="app">
       <h1>Sign up</h1>
-      <RegisterForm />
+      <RegisterForm title="Sign up" />
     </div>
   );
 }

@@ -76,6 +76,28 @@ test('react: components, hooks, renders, api calls', () => {
   c.close();
 });
 
+test('react: routes, context, props data flow', () => {
+  const f = indexInto('web-ui', join(FX, 'ms', 'web-ui'));
+  const c = ro(f);
+  // react-router routes -> components
+  const routes = new Set(c.prepare("SELECT path FROM nodes WHERE kind='route'").all().map((r) => r.path));
+  assert.ok(routes.has('/home') && routes.has('/register'));
+  const routeEdges = new Set(c.prepare("SELECT s.path||'->'||d.name e FROM edges e JOIN nodes s ON s.id=e.src JOIN nodes d ON d.id=e.dst WHERE e.kind='routes_to' AND s.kind='route'").all().map((r) => r.e));
+  assert.ok(routeEdges.has('/home->App'));
+  assert.ok(routeEdges.has('/register->RegisterForm'));
+  // context
+  assert.ok(c.prepare("SELECT 1 FROM nodes WHERE kind='context' AND name='AuthContext'").get());
+  const usesCtx = c.prepare("SELECT s.name s FROM edges e JOIN nodes s ON s.id=e.src JOIN nodes d ON d.id=e.dst WHERE e.kind='uses_context' AND d.name='AuthContext'").all().map((r) => r.s);
+  assert.ok(usesCtx.includes('RegisterForm'));
+  assert.ok(c.prepare("SELECT 1 FROM edges e JOIN nodes s ON s.id=e.src JOIN nodes d ON d.id=e.dst WHERE e.kind='provides_context' AND s.name='AuthProvider' AND d.name='AuthContext'").get());
+  // props data flow: App passes `title` to RegisterForm; RegisterForm declares prop `title`
+  const pp = c.prepare("SELECT e.attrs attrs FROM edges e JOIN nodes s ON s.id=e.src JOIN nodes d ON d.id=e.dst WHERE e.kind='passes_prop' AND s.name='App' AND d.name='RegisterForm'").get();
+  assert.ok(pp && JSON.parse(pp.attrs).props.includes('title'));
+  const rf = c.prepare("SELECT attrs FROM nodes WHERE kind='component' AND name='RegisterForm'").get();
+  assert.ok(JSON.parse(rf.attrs).props.includes('title'));
+  c.close();
+});
+
 // ---------- Full-stack federation ----------
 test('federation: frontend + backends linked, flow crosses tiers', () => {
   const login = indexInto('login-service', join(FX, 'ms', 'login-service', 'src', 'main', 'java'));

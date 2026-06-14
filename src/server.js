@@ -83,8 +83,15 @@ export function kgArchitecture() {
   }
   const endpoints = c.prepare("SELECT http_method, path, name FROM nodes WHERE http_method IS NOT NULL AND kind!='external_endpoint' ORDER BY path").all()
     .map((r) => ({ method: r.http_method, path: r.path, handler: r.name }));
+  const clientRoutes = c.prepare("SELECT path, service FROM nodes WHERE kind='route' ORDER BY path").all()
+    .map((r) => ({ path: r.path, service: r.service }));
+  const contexts = c.prepare("SELECT name, service FROM nodes WHERE kind='context' ORDER BY name").all()
+    .map((r) => r.name);
   c.close();
-  return { counts, layers, endpoints };
+  const out = { counts, layers, endpoints };
+  if (clientRoutes.length) out.client_routes = clientRoutes;
+  if (contexts.length) out.contexts = contexts;
+  return out;
 }
 
 export function kgEndpoints() {
@@ -151,7 +158,7 @@ export function kgImpactOf(symbol) {
   const base = resolveSym(c, symbol);
   if (!base.length) { c.close(); return { symbol, error: 'symbol not found', impacted: [] }; }
   const start = expandMembers(c, base);
-  const reached = reachable(c, new Set(start), ['calls', 'calls_remote', 'injects', 'routes_to', 'persists', 'renders', ...REL_KINDS], false);
+  const reached = reachable(c, new Set(start), ['calls', 'calls_remote', 'injects', 'routes_to', 'persists', 'renders', 'passes_prop', 'uses_context', 'provides_context', ...REL_KINDS], false);
   const startSet = new Set(start);
   for (const s of startSet) reached.delete(s);
   const selfClasses = new Set(start.map(ownerClass));

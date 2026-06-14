@@ -38,7 +38,7 @@ slide('Code Knowledge Graph for Agents (code-kg) — Node.js', [
 ]);
 
 slide('Architecture & Pipeline', [
-  { t: '[1] Extractor (tree-sitter Java + TSX) -> nodes + edges (calls, imports, extends, implements)', lvl: 0 },
+  { t: '[1] Extractor (tree-sitter Java + TSX) -> nodes + edges; React adds components, hooks, renders, routes, context, props', lvl: 0 },
   { t: '[2] Spring pass -> endpoints (@GetMapping + @RequestMapping prefix), DI injects, layers', lvl: 0 },
   { t: '[2b] JPA/Hibernate -> @Entity + table, relationships (cascade/fetch/mappedBy/owning/@JoinColumn), repos', lvl: 0 },
   { t: '[2c] Outbound -> backend Feign/RestTemplate + React fetch/axios -> calls_service', lvl: 0 },
@@ -90,7 +90,7 @@ const children = [
   LI('Scope: Java, Spring Boot, Hibernate/JPA, React, and full-stack/cross-service flow via federation.'),
 
   H('2. Architecture & Pipeline', HeadingLevel.HEADING_1),
-  LI('[1] Extractor (tree-sitter Java + TSX): nodes (class/method/field, component/hook/module) and edges (calls/imports/extends/implements).'),
+  LI('[1] Extractor (tree-sitter Java + TSX): nodes (class/method/field; React component/hook/module/route/context) and edges (calls/imports/extends/implements; React renders/passes_prop/uses_hook/uses_context/provides_context/routes_to).'),
   LI('[2] Spring pass: endpoints (mapping + @RequestMapping prefix), DI injects, layers.'),
   LI('[2b] JPA/Hibernate: @Entity + table, relationships with cascade/fetch/mappedBy/owning/@JoinColumn, JpaRepository -> entity (persists), per-column mapping.'),
   LI('[2c] Outbound: backend Feign/RestTemplate and React fetch/axios, recorded as calls_service edges.'),
